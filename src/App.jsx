@@ -189,7 +189,7 @@ async function callGemini(systemPrompt, userPrompt) {
       body: JSON.stringify({
         systemInstruction: systemPrompt,
         contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-        maxOutputTokens: 1000,
+        maxOutputTokens: 3000,
       }),
     });
     clearTimeout(timeout);
@@ -214,7 +214,7 @@ async function callGeminiChat(messages, systemPrompt) {
       body: JSON.stringify({
         systemInstruction: systemPrompt,
         contents: toGeminiContents(messages),
-        maxOutputTokens: 1200,
+        maxOutputTokens: 2000,
       }),
     });
     clearTimeout(timeout);
@@ -229,6 +229,41 @@ async function callGeminiChat(messages, systemPrompt) {
 }
 
 // ---- File exporters ----
+function markdownInlineToHtml(text) {
+  return escapeHtml(text)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g, "<em>$1</em>");
+}
+
+function markdownToHtml(text) {
+  const lines = (text || "").split("\n");
+  const out = [];
+  let listBuffer = [];
+  let listType = null;
+  const flushList = () => {
+    if (listBuffer.length) {
+      const tag = listType === "ol" ? "ol" : "ul";
+      out.push(`<${tag}>${listBuffer.map((i) => `<li>${markdownInlineToHtml(i)}</li>`).join("")}</${tag}>`);
+    }
+    listBuffer = []; listType = null;
+  };
+  lines.forEach((raw) => {
+    const t = raw.trim();
+    if (t === "") { flushList(); return; }
+    if (/^-{3,}$/.test(t)) { flushList(); out.push("<hr/>"); return; }
+    const h = t.match(/^(#{1,4})\s+(.*)/);
+    if (h) { flushList(); const lvl = Math.min(h[1].length + 1, 6); out.push(`<h${lvl}>${markdownInlineToHtml(h[2])}</h${lvl}>`); return; }
+    const bullet = t.match(/^[-*]\s+(.*)/);
+    if (bullet) { if (listType !== "ul") { flushList(); listType = "ul"; } listBuffer.push(bullet[1]); return; }
+    const numbered = t.match(/^\d+\.\s+(.*)/);
+    if (numbered) { if (listType !== "ol") { flushList(); listType = "ol"; } listBuffer.push(numbered[1]); return; }
+    flushList();
+    out.push(`<p>${markdownInlineToHtml(t)}</p>`);
+  });
+  flushList();
+  return out.join("\n");
+}
+
 function exportWord(task, teamLabel) {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(task.title)}</title></head>
   <body style="font-family:Calibri,Arial,sans-serif;">
@@ -237,7 +272,7 @@ function exportWord(task, teamLabel) {
   <strong>Status:</strong> ${escapeHtml(task.status)}<br/>
   <strong>Generated:</strong> ${new Date(task.createdAt).toLocaleString("id-ID")}</p>
   <hr/>
-  <div style="white-space:pre-wrap;line-height:1.6;font-size:14px;">${escapeHtml(task.output || "(no output yet)")}</div>
+  <div style="line-height:1.6;font-size:14px;">${markdownToHtml(task.output) || "<p>(no output yet)</p>"}</div>
   </body></html>`;
   downloadBlob(`${slug(task.title)}.doc`, html, "application/msword");
 }
@@ -550,7 +585,7 @@ export default function App() {
     const team = teamsRef.current.find((t) => t.id === task.teamId);
     const teamLabel = team ? team.name : "General Management";
     const agentLabel = team ? team.agent : "GM-AI";
-    const systemPrompt = `You are ${agentLabel}, the AI agent leading "${teamLabel}" inside a company's AI-run department, reporting directly to the CEO through the GM AI Agent. Your specialties: ${team ? team.skills.join(", ") : "general management, coordination"}. Respond to the CEO's directive with a concise, professional, actionable report (150-220 words) as if you already completed the task: include what was done/found, key data points or recommendations, and a clear next step. Write in the same language as the directive. No preamble.`;
+    const systemPrompt = `You are ${agentLabel}, the AI agent leading "${teamLabel}" inside a company's AI-run department, reporting directly to the CEO through the GM AI Agent. Your specialties: ${team ? team.skills.join(", ") : "general management, coordination"}. Respond to the CEO's directive with a professional, actionable report as if you already completed the task: include what was done/found, key data points or recommendations, and a clear next step. Keep it complete but disciplined — aim for 200-350 words; if the topic has multiple phases or sections, summarize each in 1-2 sentences rather than expanding at length, so the report always finishes properly instead of being cut off. Write in the same language as the directive. No preamble.`;
 
     let output = await callGemini(systemPrompt, task.title);
     if (!output) {
